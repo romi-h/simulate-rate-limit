@@ -1,0 +1,276 @@
+<html>
+<head>
+    <title>Express HTML</title>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.1/jquery.min.js"></script>
+    <!-- Google Fonts -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300italic,700,700italic">
+
+    <!-- CSS Reset -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.css">
+
+    <!-- Milligram CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.css">
+
+
+    <style>
+        .charts {
+            max-width: 800px;
+            height: 190px;
+            margin: 20px auto;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row">
+            <div class="column">
+                <div id="chart-user1" class="charts"></div>
+            </div>
+            <div class="column">
+                <div id="chart-user2" class="charts"></div>
+            </div>
+        </div>
+    </div>
+
+
+    <div class="container">
+        <fieldset>
+            <label for="user1Config">User 1</label>
+            <select id="user1Config">
+                <option value="public-no-rate-limit">/api/public (no rate limit)</option>
+                <option value="private-no-rate-limit">/api/private (no rate limit)</option>
+
+                <option value="public-rate-limit-time-bucket">/express-rate-limit/public (time bucket by IP, 60req/30secs)</option>
+                <option value="private-rate-limit-time-bucket">/express-rate-limit/private (time bucket by user id, 60req/30secs)</option>
+
+
+                <option value="public-rate-limit-gcra">/gcra-rate-limit/public (leaky bucket by IP, 1req = 1token, max 20 tokens, regenerating 2tokens/sec)</option>
+                <option value="private-rate-limit-gcra">/gcra-rate-limit/private (leaky bucket by user id, 1req = 1token, max 20 tokens, regenerating 2tokens/sec)</option>
+            </select>
+
+            <label for="user2Config">User 2</label>
+            <select id="user2Config">
+                <option value="public-no-rate-limit">/api/public (no rate limit)</option>
+                <option value="private-no-rate-limit">/api/private (no rate limit)</option>
+
+                <option value="public-rate-limit-time-bucket">/express-rate-limit/public (time bucket by IP, 60req/30secs)</option>
+                <option value="private-rate-limit-time-bucket">/express-rate-limit/private (time bucket by user id, 60req/30secs)</option>
+
+
+                <option value="public-rate-limit-gcra">/gcra-rate-limit/public (leaky bucket by IP, 1req = 1token, max 20 tokens, regenerating 2tokens/sec)</option>
+                <option value="private-rate-limit-gcra">/gcra-rate-limit/private (leaky bucket by user id, 1req = 1token, max 20 tokens, regenerating 2tokens/sec)</option>
+            </select>
+
+            <label for="requestPerSecond">Requests / sec (max 20)</label>
+            <input type="text" id="requestPerSecond" value="10">
+
+            <button class="button-primary" onclick="start()">Start</button>
+            <button class="button-primary" onclick="stop()">Stop</button>
+        </fieldset>
+    </div>
+
+    <script>
+
+      var intervalIds = [];
+      // -------- Initial Render Charts ---------------
+      const {chart: chart1, traffic: traffic1} = createChart('user1', '#chart-user1');
+      const {chart: chart2, traffic: traffic2} = createChart('user2', '#chart-user2');
+
+
+      /* ------------------------------------------------------------------------------------------------------------
+         createChart
+      */
+      function createChart(title, elementId) {
+        const xAxisRange = 20;
+        const traffic = Array(xAxisRange).fill(0);
+        // https://apexcharts.com/docs/options/
+        const options = {
+          title: {
+            text: title,
+            align: 'center',
+          },
+          chart: {
+            // sparkline: {
+            //   enabled: true
+            // },
+            type: 'line',
+            animations: {
+              enabled: true,
+              easing: "linear",
+              dynamicAnimation: {
+                speed: 2000
+              },
+              toolbar: {
+                show: false
+              },
+              zoom: {
+                enabled: false
+              }
+            },
+            toolbar: {
+              show: false
+            },
+            zoom: {
+              enabled: false
+            }
+          },
+          stroke: {
+            curve: "smooth",
+            width: 1
+          },
+          tooltip: { enabled: false },
+          markers: {
+            size: 0
+          },
+          xaxis: {
+            range: xAxisRange,
+            title: {
+              text: 'time (seconds)',
+            }
+          },
+          yaxis: {
+            min: 0,
+            max: 20,
+            title: {
+              text: 'requests (count)',
+            }
+          },
+          series: [
+            {
+              data: traffic.slice()
+            }
+          ]
+        };
+
+        const chart = new ApexCharts(document.querySelector(elementId), options);
+        chart.render();
+
+        return {chart, traffic};
+      }
+
+
+      /* ------------------------------------------------------------------------------------------------------------
+         callApi
+      */
+      async function callApi(chart, traffic, {requestsPerSecond, path, authorization}) {
+        const fetchHeaders = new Headers();
+        if (!!authorization) {
+          fetchHeaders.append('authorization', authorization);
+        }
+        fetchHeaders.append('pragma', 'no-cache');
+        fetchHeaders.append('cache-control', 'no-cache');
+        const fetchOption = { method: 'GET', headers: fetchHeaders };
+
+        const refreshIntervalId = setInterval(async ()=>{
+
+          const fetchPromises = _.times(requestsPerSecond, () => { return fetch(path, fetchOption) });
+          const responses = await Promise.all(fetchPromises);
+          const successResponseCount = _(responses).filter({status: 200}).map('status').value().length;
+          traffic.push(successResponseCount);
+          chart.updateSeries([
+            {
+              data: traffic.slice()
+            }
+          ])
+        }, 1000);
+
+        intervalIds.push(refreshIntervalId);
+      }
+
+      /* ------------------------------------------------------------------------------------------------------------
+         simulateRandomData
+      */
+      function simulateRandomData(chart, traffic) {
+        const refreshIntervalId = setInterval(()=>{
+          traffic.push(Math.floor(Math.random()*10));
+          chart.updateSeries([
+            {
+              data: traffic.slice()
+            }
+          ])
+        },2000);
+        intervalIds.push(refreshIntervalId);
+      }
+
+      /* ------------------------------------------------------------------------------------------------------------
+         start
+      */
+      async function start() {
+
+        // simulateRandomData(chart1, traffic1);
+        // simulateRandomData(chart2, traffic2);
+
+        requestsPerSecond = +$("#requestPerSecond").val();
+
+        switch ($("#user1Config").val()) {
+          case "public-no-rate-limit":
+            callApi(chart1, traffic1, { requestsPerSecond, path: '/api/public' });
+            break;
+          case "private-no-rate-limit":
+            callApi(chart1, traffic1, {requestsPerSecond, path: '/api/private', authorization: 'Basic b25lOm1hc3Rlci1rZXk='});
+            break;
+          case "public-rate-limit-time-bucket":
+            callApi(chart1, traffic1, {requestsPerSecond, path: '/express-rate-limit/public'});
+            break;
+          case "private-rate-limit-time-bucket":
+            callApi(chart1, traffic1, {requestsPerSecond, path: '/express-rate-limit/private', authorization: 'Basic b25lOm1hc3Rlci1rZXk='});
+            break;
+          case "public-rate-limit-gcra":
+            callApi(chart1, traffic1, {requestsPerSecond, path: '/gcra-rate-limit/public'});
+            break;
+          case "private-rate-limit-gcra":
+            callApi(chart1, traffic1, {requestsPerSecond, path: '/gcra-rate-limit/private', authorization: 'Basic b25lOm1hc3Rlci1rZXk='});
+            break;
+        }
+
+
+        switch ($("#user2Config").val()) {
+          case "public-no-rate-limit":
+            callApi(chart2, traffic2, {requestsPerSecond, path: '/api/public'});
+            break;
+          case "private-no-rate-limit":
+            callApi(chart2, traffic2, {requestsPerSecond, path: '/api/private', authorization: 'Basic dHdvOm1hc3Rlci1rZXk='});
+            break;
+          case "public-rate-limit-time-bucket":
+            callApi(chart2, traffic2, {requestsPerSecond, path: '/express-rate-limit/public'});
+            break;
+          case "private-rate-limit-time-bucket":
+            callApi(chart2, traffic2, {requestsPerSecond, path: '/express-rate-limit/private', authorization: 'Basic dHdvOm1hc3Rlci1rZXk='});
+            break;
+          case "public-rate-limit-gcra":
+            callApi(chart2, traffic2, {requestsPerSecond, path: '/gcra-rate-limit/public'});
+            break;
+          case "private-rate-limit-gcra":
+            callApi(chart2, traffic2, {requestsPerSecond, path: '/gcra-rate-limit/private', authorization: 'Basic dHdvOm1hc3Rlci1rZXk='});
+            break;
+        }
+
+
+        // callApi(chart1, traffic1, {requestsPerSecond: 10, path: '/express-rate-limit/public-burst'});
+        // callApi(chart2, traffic2, {requestsPerSecond: 10, path: '/express-rate-limit/public-burst'});
+
+        // callApi(chart1, traffic1, {requestsPerSecond: 20, path: '/express-rate-limit/public-burst'});
+        // callApi(chart2, traffic2, {requestsPerSecond: 20, path: '/express-rate-limit/public-burst'});
+
+
+
+
+      }
+
+      /* ------------------------------------------------------------------------------------------------------------
+         stop
+      */
+      function stop() {
+        _.each(intervalIds, (refreshIntervalId) => clearInterval(refreshIntervalId));
+      }
+
+
+
+    </script>
+
+</body>
+</html>
+
